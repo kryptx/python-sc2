@@ -273,6 +273,18 @@ RESEARCH_INFO: Dict[
             "requires_tech_building": UnitTypeId.HIVE,
         }
     },
+    UnitTypeId.ROACHWARREN: {
+        UpgradeId.GLIALRECONSTITUTION: {
+            "upgrade": UpgradeId.GLIALRECONSTITUTION,
+            "ability": AbilityId.RESEARCH_GLIALREGENERATION,
+            "requires_tech_building": UnitTypeId.LAIR,
+        },
+        UpgradeId.TUNNELINGCLAWS: {
+            "upgrade": UpgradeId.TUNNELINGCLAWS,
+            "ability": AbilityId.RESEARCH_TUNNELINGCLAWS,
+            "requires_tech_building": UnitTypeId.LAIR,
+        },
+    },
     UnitTypeId.ROBOTICSBAY: {
         UpgradeId.EXTENDEDTHERMALLANCE: {
             "ability": AbilityId.RESEARCH_EXTENDEDTHERMALLANCE,

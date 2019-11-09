@@ -228,6 +228,8 @@ class BotAI(DistanceCalculation):
                 # Check if any pair of resource of these groups is closer than threshold together
                 if any(
                     resource_a.distance_to(resource_b) <= resource_spread_threshold
+                    # Require minerals to be at same height -- fixes blood boil
+                    and abs(resource_a.position3d.z - resource_b.position3d.z) <= 0.5
                     for resource_a, resource_b in itertools.product(group_a, group_b)
                 ):
                     # Remove the single groups and add the merged group
@@ -261,7 +263,19 @@ class BotAI(DistanceCalculation):
                 # Check if point can be built on
                 if self._game_info.placement_grid[point.rounded] == 1
                 # Check if all resources have enough space to point
-                and all(point.distance_to(resource) > (7 if resource in geysers else 6) for resource in resources)
+                and all(
+                    (
+                        abs(point.y - resource.position.y) >= 7 or
+                        abs(point.x - resource.position.x) >= 7 or
+                        abs(point.y - resource.position.y) >= 6 and abs(point.x - resource.position.x) >= 6
+                    ) if resource in geysers
+                    else (
+                        abs(point.y - resource.position.y) >= 6 or
+                        abs(point.x - resource.position.x) >= 6.5 or
+                        abs(point.y - resource.position.y) >= 5 and abs(point.x - resource.position.x) >= 5.5
+                    )
+                    for resource in resources
+                )
             )
             # Choose best fitting point
             result = min(possible_points, key=lambda point: sum(point.distance_to(resource) for resource in resources))
@@ -664,7 +678,7 @@ class BotAI(DistanceCalculation):
 
     def select_build_worker(self, pos: Union[Unit, Point2, Point3], force: bool = False) -> Optional[Unit]:
         """Select a worker to build a building with.
-        
+
         Example::
 
             barracks_placement_position = self.main_base_ramp.barracks_correct_placement
@@ -1555,7 +1569,7 @@ class BotAI(DistanceCalculation):
 
     async def on_start(self):
         """
-        Override this in your bot class. This function is called after "on_start". 
+        Override this in your bot class. This function is called after "on_start".
         At this point, game_data, game_info and the first iteration of game_state (self.state) are available.
         """
 
