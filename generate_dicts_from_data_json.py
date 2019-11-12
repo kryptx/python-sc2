@@ -309,6 +309,9 @@ def get_upgrade_abilities(data):
         if unit_type == UnitTypeId.TECHLAB:
             continue
 
+        if unit_type == UnitTypeId.FORGE:
+            unit_abilities = [ obj for obj in unit_abilities if obj['ability'] != AbilityId.RESEARCH_CHARGE.value ]
+
         current_unit_research_abilities = OrderedDict2()
         for ability_info in unit_abilities:
             ability_id_value: int = ability_info.get("ability", 0)
@@ -403,7 +406,8 @@ def get_upgrade_researched_from(unit_research_abilities: dict):
 
     for researcher_unit, research_abilities in unit_research_abilities.items():
         for upgrade, research_info in research_abilities.items():
-            upgrade_researched_from[upgrade] = researcher_unit
+            if upgrade not in upgrade_researched_from:
+                upgrade_researched_from[upgrade] = researcher_unit
 
     return upgrade_researched_from
 

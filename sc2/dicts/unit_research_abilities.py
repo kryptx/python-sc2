@@ -165,10 +165,6 @@ RESEARCH_INFO: Dict[
         }
     },
     UnitTypeId.FORGE: {
-        UpgradeId.CHARGE: {
-            "ability": AbilityId.RESEARCH_CHARGE,
-            "requires_power": True,
-        },
         UpgradeId.PROTOSSGROUNDARMORSLEVEL1: {
             "ability": AbilityId.FORGERESEARCH_PROTOSSGROUNDARMORLEVEL1,
             "requires_power": True,
