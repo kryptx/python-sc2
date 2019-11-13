@@ -9,10 +9,11 @@ Requirements
 
 Installation
 -------------
-Install through pip using ``pip install sc2`` if Python is in your environment path, or go into your python installation folder and run through console ``python -m pip install sc2``.
+Install through pip using ``pip install burnysc2`` if Python is in your environment path, or go into your python installation folder and run through console ``python -m pip install burnysc2``.
 
-Alternatively you can install a specific branch directly from github::
+Alternatively (of if the command above doesn't work) you can install a specific branch directly from github, here the develop branch::
 
+    pip install pipenv
     pip install --upgrade --force-reinstall https://github.com/BurnySc2/python-sc2/archive/develop.zip
 
 Creating a bot
@@ -206,12 +207,12 @@ A function that can test which position is valid for a spawning pool is ``self.f
 
 One thing that was not mentioned yet is that you don't want to build more than 1 spawning pool. To prevent this, you can check that the number of pending and completed structures is zero::
 
-    if self.already_pending(UnitTypeId.SPAWNINGPOOL) + self.units.filter(lambda structure: structure.type_id == UnitTypeId.SPAWNINGPOOL and structure.is_ready).amount == 0:
+    if self.already_pending(UnitTypeId.SPAWNINGPOOL) + self.structures.filter(lambda structure: structure.type_id == UnitTypeId.SPAWNINGPOOL and structure.is_ready).amount == 0:
         # Build spawning pool
 
 So in total: To build a spawning pool in direction of the map center, it is recommended to use::
 
-    if self.can_afford(UnitTypeId.SPAWNINGPOOL) and self.already_pending(UnitTypeId.SPAWNINGPOOL) + self.units.filter(lambda structure: structure.type_id == UnitTypeId.SPAWNINGPOOL and structure.is_ready).amount == 0:
+    if self.can_afford(UnitTypeId.SPAWNINGPOOL) and self.already_pending(UnitTypeId.SPAWNINGPOOL) + self.structures.filter(lambda structure: structure.type_id == UnitTypeId.SPAWNINGPOOL and structure.is_ready).amount == 0:
         worker_candidates = self.workers.filter(lambda worker: (worker.is_collecting or worker.is_idle) and worker.tag not in self.unit_tags_received_action)
         # Worker_candidates can be empty
         if worker_candidates:
@@ -225,7 +226,7 @@ So in total: To build a spawning pool in direction of the map center, it is reco
 
 The same can be achieved with the convenience function ``self.build`` which automatically picks a worker and internally uses ``self.find_placement``::
 
-    if self.can_afford(UnitTypeId.SPAWNINGPOOL) and self.already_pending(UnitTypeId.SPAWNINGPOOL) + self.units.filter(lambda structure: structure.type_id == UnitTypeId.SPAWNINGPOOL and structure.is_ready).amount == 0:
+    if self.can_afford(UnitTypeId.SPAWNINGPOOL) and self.already_pending(UnitTypeId.SPAWNINGPOOL) + self.structures.filter(lambda structure: structure.type_id == UnitTypeId.SPAWNINGPOOL and structure.is_ready).amount == 0:
         map_center = self.game_info.map_center
         position_towards_map_center = self.start_location.towards(map_center, distance=5)
         await self.build(UnitTypeId.SPAWNINGPOOL, near=position_towards_map_center, placement_step=1)

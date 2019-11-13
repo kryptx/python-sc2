@@ -3,6 +3,7 @@ import itertools
 import logging
 import math
 import random
+import time
 from collections import Counter
 from typing import Any, Dict, List, Optional, Set, Tuple, Union, TYPE_CHECKING
 
@@ -15,6 +16,7 @@ from .constants import (
     TERRAN_TECH_REQUIREMENT,
     PROTOSS_TECH_REQUIREMENT,
     ZERG_TECH_REQUIREMENT,
+    ALL_GAS,
 )
 from .data import ActionResult, Alert, Race, Result, Target, race_gas, race_townhalls, race_worker
 from .distances import DistanceCalculation
@@ -57,6 +59,9 @@ class BotAI(DistanceCalculation):
             # Prevent overwriting the opponent_id which is set here https://github.com/Hannessa/python-sc2-ladderbot/blob/master/__init__.py#L40
             # otherwise set it to None
             self.opponent_id: str = None
+        # Select distance calculation method, see distances.py: _distances_override_functions function
+        if not hasattr(self, "distance_calculation_method"):
+            self.distance_calculation_method: int = 2
         # This value will be set to True by main.py in self._prepare_start if game is played in realtime (if true, the bot will have limited time per step)
         self.realtime: bool = False
         self.all_units: Units = Units([], self)
@@ -91,7 +96,16 @@ class BotAI(DistanceCalculation):
         self._unit_tags_seen_this_game: Set[int] = set()
         self._units_previous_map: Dict[int, Unit] = dict()
         self._structures_previous_map: Dict[int, Unit] = dict()
+        self._enemy_units_previous_map: Dict[int, Unit] = dict()
+        self._enemy_structures_previous_map: Dict[int, Unit] = dict()
         self._previous_upgrades: Set[UpgradeId] = set()
+        self._time_before_step: float = None
+        self._time_after_step: float = None
+        self._min_step_time: float = math.inf
+        self._max_step_time: float = 0
+        self._last_step_step_time: float = 0
+        self._total_time_in_on_step: float = 0
+        self._total_steps_iterations: int = 0
         # Internally used to keep track which units received an action in this frame, so that self.train() function does not give the same larva two orders - cleared every frame
         self.unit_tags_received_action: Set[int] = set()
 
@@ -105,6 +119,24 @@ class BotAI(DistanceCalculation):
         """ Returns time as string in min:sec format """
         t = self.time
         return f"{int(t // 60):02}:{int(t % 60):02}"
+
+    @property
+    def step_time(self) -> Tuple[float, float, float, float]:
+        """ Returns a tuple of step duration in milliseconds.
+        First value is the minimum step duration - the shortest the bot ever took
+        Second value is the average step duration
+        Third value is the maximum step duration - the longest the bot ever took (including on_start())
+        Fourth value is the step duration the bot took last iteration
+        If called in the first iteration, it returns (inf, 0, 0, 0) """
+        avg_step_duration = (
+            (self._total_time_in_on_step / self._total_steps_iterations) if self._total_steps_iterations else 0
+        )
+        return (
+            self._min_step_time * 1000,
+            avg_step_duration * 1000,
+            self._max_step_time * 1000,
+            self._last_step_step_time * 1000,
+        )
 
     @property
     def game_info(self) -> GameInfo:
@@ -610,11 +642,14 @@ class BotAI(DistanceCalculation):
 
         :param item_id:
         :param check_supply_cost: """
-        enough_supply = True
         cost = self.calculate_cost(item_id)
+        if cost.minerals > self.minerals or cost.vespene > self.vespene:
+            return False
         if check_supply_cost and isinstance(item_id, UnitTypeId):
-            enough_supply = self.supply_left >= self.calculate_supply_cost(item_id)
-        return cost.minerals <= self.minerals and cost.vespene <= self.vespene and enough_supply
+            supply_cost = self.calculate_supply_cost(item_id)
+            if supply_cost and supply_cost > self.supply_left:
+                return False
+        return True
 
     async def can_cast(
         self,
@@ -1093,6 +1128,9 @@ class BotAI(DistanceCalculation):
     def research(self, upgrade_type: UpgradeId) -> bool:
         """
         Researches an upgrade from a structure that can research it, if it is idle and powered (protoss).
+        Returns True if the research was started.
+        Return False if the requirement was not met, or the bot did not have enough resources to start the upgrade,
+        or the building to research the upgrade was missing or not idle.
 
         Example::
 
@@ -1349,13 +1387,16 @@ class BotAI(DistanceCalculation):
         if len(self._game_info.player_races) == 2:
             self.enemy_race: Race = Race(self._game_info.player_races[3 - self.player_id])
 
+        self._distances_override_functions(self.distance_calculation_method)
+
     def _prepare_first_step(self):
         """First step extra preparations. Must not be called before _prepare_step."""
         if self.townhalls:
             self._game_info.player_start_location = self.townhalls.first.position
-            # Calculate and cache expansion locations forever inside 'self._cache_expansion_locations'
-            self.expansion_locations
+            # Calculate and cache expansion locations forever inside 'self._cache_expansion_locations', this is done to prevent a bug when this is run and cached later in the game
+            _ = self.expansion_locations
         self._game_info.map_ramps, self._game_info.vision_blockers = self._game_info._find_ramps_and_vision_blockers()
+        self._time_before_step: float = time.perf_counter()
 
     def _prepare_step(self, state, proto_game_info):
         """
@@ -1371,6 +1412,8 @@ class BotAI(DistanceCalculation):
         # Required for events, needs to be before self.units are initialized so the old units are stored
         self._units_previous_map: Dict = {unit.tag: unit for unit in self.units}
         self._structures_previous_map: Dict = {structure.tag: structure for structure in self.structures}
+        self._enemy_units_previous_map: Dict = {unit.tag: unit for unit in self.enemy_units}
+        self._enemy_structures_previous_map: Dict = {structure.tag: structure for structure in self.enemy_structures}
 
         self._prepare_units()
         self.minerals: int = state.common.minerals
@@ -1391,6 +1434,7 @@ class BotAI(DistanceCalculation):
 
         self.idle_worker_count: int = state.common.idle_worker_count
         self.army_count: int = state.common.army_count
+        self._time_before_step: float = time.perf_counter()
 
     def _prepare_units(self):
         # Set of enemy units detected by own sensor tower, as blips have less unit information than normal visible units
@@ -1447,7 +1491,8 @@ class BotAI(DistanceCalculation):
                         self.structures.append(unit_obj)
                         if unit_id in race_townhalls[self.race]:
                             self.townhalls.append(unit_obj)
-                        elif unit_id == race_gas[self.race]:
+                        elif unit_id in ALL_GAS or unit_obj.vespene_contents:
+                            # TODO: remove "or unit_obj.vespene_contents" when a new linux client newer than version 4.10.0 is released
                             self.gas_buildings.append(unit_obj)
                         elif unit_id in {
                             UnitTypeId.TECHLAB,
@@ -1476,8 +1521,24 @@ class BotAI(DistanceCalculation):
                     else:
                         self.enemy_units.append(unit_obj)
 
+        # Force distance calculation and caching on all units using scipy pdist or cdist
+        if self.distance_calculation_method == 1:
+            _ = self._unit_index_dict
+            _ = self._pdist
+        elif self.distance_calculation_method == 2:
+            _ = self._unit_index_dict
+            _ = self._cdist
+
     async def _after_step(self) -> int:
         """ Executed by main.py after each on_step function. """
+        # Keep track of the bot on_step duration
+        self._time_after_step: float = time.perf_counter()
+        step_duration = self._time_after_step - self._time_before_step
+        self._min_step_time = min(step_duration, self._min_step_time)
+        self._max_step_time = max(step_duration, self._max_step_time)
+        self._last_step_step_time = step_duration
+        self._total_time_in_on_step += step_duration
+        self._total_steps_iterations += 1
         # Commit and clear bot actions
         await self._do_actions(self.actions)
         self.actions.clear()
@@ -1485,6 +1546,7 @@ class BotAI(DistanceCalculation):
         self.unit_tags_received_action.clear()
         # Commit debug queries
         await self._client._send_debug()
+
         return self.state.game_loop
 
     async def issue_events(self):
@@ -1499,12 +1561,18 @@ class BotAI(DistanceCalculation):
         await self._issue_unit_added_events()
         await self._issue_building_events()
         await self._issue_upgrade_events()
+        await self._issue_vision_events()
 
     async def _issue_unit_added_events(self):
         for unit in self.units:
             if unit.tag not in self._units_previous_map and unit.tag not in self._unit_tags_seen_this_game:
                 self._unit_tags_seen_this_game.add(unit.tag)
                 await self.on_unit_created(unit)
+            elif unit.tag in self._units_previous_map:
+                # Check if a unit took damage this frame and then trigger event
+                previous_frame_unit: Unit = self._units_previous_map[unit.tag]
+                if unit.health < previous_frame_unit.health or unit.shield < previous_frame_unit.shield:
+                    await self.on_unit_took_damage(unit)
 
     async def _issue_upgrade_events(self):
         difference = self.state.upgrades - self._previous_upgrades
@@ -1518,6 +1586,14 @@ class BotAI(DistanceCalculation):
             if structure.tag not in self._structures_previous_map and structure.build_progress < 1:
                 await self.on_building_construction_started(structure)
                 continue
+            elif structure.tag in self._structures_previous_map:
+                # Check if a structure took damage this frame and then trigger event
+                previous_frame_structure: Unit = self._structures_previous_map[structure.tag]
+                if (
+                    structure.health < previous_frame_structure.health
+                    or structure.shield < previous_frame_structure.shield
+                ):
+                    await self.on_unit_took_damage(structure)
             # From here on, only check completed structure, so we ignore structures with build_progress < 1
             if structure.build_progress < 1:
                 continue
@@ -1526,11 +1602,32 @@ class BotAI(DistanceCalculation):
             if structure_prev and structure_prev.build_progress < 1:
                 await self.on_building_construction_complete(structure)
 
+    async def _issue_vision_events(self):
+        # Call events for enemy unit entered vision
+        for enemy_unit in self.enemy_units:
+            if enemy_unit.tag not in self._enemy_units_previous_map:
+                await self.on_enemy_unit_entered_vision(enemy_unit)
+        for enemy_structure in self.enemy_structures:
+            if enemy_structure.tag not in self._enemy_structures_previous_map:
+                await self.on_enemy_unit_entered_vision(enemy_structure)
+
+        # Call events for enemy unit left vision
+        if self.enemy_units:
+            visible_enemy_units = self.enemy_units.tags
+            for enemy_unit_tag in self._enemy_units_previous_map.keys():
+                if enemy_unit_tag not in visible_enemy_units:
+                    await self.on_enemy_unit_left_vision(enemy_unit_tag)
+        if self.enemy_structures:
+            visible_enemy_structures = self.enemy_structures.tags
+            for enemy_structure_tag in self._enemy_units_previous_map.keys():
+                if enemy_structure_tag not in visible_enemy_structures:
+                    await self.on_enemy_unit_left_vision(enemy_structure_tag)
+
     async def _issue_unit_dead_events(self):
         for unit_tag in self.state.dead_units:
             await self.on_unit_destroyed(unit_tag)
 
-    async def on_unit_destroyed(self, unit_tag):
+    async def on_unit_destroyed(self, unit_tag: int):
         """
         Override this in your bot class.
         Note that this function uses unit tags and not the unit objects
@@ -1565,6 +1662,29 @@ class BotAI(DistanceCalculation):
         Override this in your bot class. This function is called with the upgrade id of an upgrade that was not finished last step and is now.
 
         :param upgrade:
+        """
+
+    async def on_unit_took_damage(self, unit: Unit):
+        """
+        Override this in your bot class. This function is called when a unit (unit or structure) took damage. It will not be called if the unit died this frame.
+        This may be called frequently for terran structures that are burning down, or zerg buildings that are off creep, or terran bio units that just used stimpack ability.
+
+        :param unit:
+        """
+
+    async def on_enemy_unit_entered_vision(self, unit: Unit):
+        """
+        Override this in your bot class. This function is called when an enemy unit (unit or structure) entered vision (which was not visible last frame).
+
+        :param unit:
+        """
+
+    async def on_enemy_unit_left_vision(self, unit_tag: int):
+        """
+        Override this in your bot class. This function is called when an enemy unit (unit or structure) left vision (which was visible last frame).
+        Same as the self.on_unit_destroyed event, this function is called with the unit's tag because the unit is no longer visible anymore. If you want to store a snapshot of the unit, use self._enemy_units_previous_map[unit_tag] for units or self._enemy_structures_previous_map[unit_tag] for structures.
+
+        :param unit_tag:
         """
 
     async def on_start(self):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 import warnings
+import math
 from typing import Any, Dict, List, Optional, Set, Tuple, Union, TYPE_CHECKING
 
 from .cache import property_immutable_cache, property_mutable_cache
@@ -38,7 +39,18 @@ from .constants import (
     UNIT_PHOTONCANNON,
     UNIT_COLOSSUS,
 )
-from .data import Alliance, Attribute, CloakState, DisplayType, Race, TargetType, warpgate_abilities, TargetType, Target
+from .data import (
+    Alliance,
+    Attribute,
+    CloakState,
+    DisplayType,
+    Race,
+    TargetType,
+    warpgate_abilities,
+    TargetType,
+    Target,
+    race_gas,
+)
 from .ids.ability_id import AbilityId
 from .ids.buff_id import BuffId
 from .ids.upgrade_id import UpgradeId
@@ -449,15 +461,18 @@ class Unit:
         """ Returns direction the unit is facing as a float in range [0,2π). 0 is in direction of x axis."""
         return self._proto.facing
 
-    # TODO: a function that checks if this unit is facing another unit
-    def is_facing_unit(self, other_unit: Unit, angle_error: float = 1e-3) -> bool:
-        """
-        Function not completed yet
+    def is_facing(self, other_unit: Unit, angle_error: float = 0.05) -> bool:
+        """ Check if this unit is facing the target unit. If you make angle_error too small, there might be rounding errors. If you make angle_error too big, this function might return false positives.
 
         :param other_unit:
-        :param angle_error:
-        """
-        pass
+        :param angle_error: """
+        angle = math.atan2(
+            other_unit.position_tuple[1] - self.position_tuple[1], other_unit.position_tuple[0] - self.position_tuple[0]
+        )
+        if angle < 0:
+            angle += math.pi * 2
+        angle_difference = math.fabs(angle - self.facing)
+        return angle_difference < angle_error
 
     @property
     def radius(self) -> Union[int, float]:
@@ -629,10 +644,11 @@ class Unit:
         """ Returns the target tag (if it is a Unit) or Point2 (if it is a Position)
         from the first order, returns None if the unit is idle """
         if self.orders:
-            if isinstance(self.orders[0].target, int):
-                return self.orders[0].target
+            target = self.orders[0].target
+            if isinstance(target, int):
+                return target
             else:
-                return Point2.from_proto(self.orders[0].target)
+                return Point2.from_proto(target)
         return None
 
     @property
@@ -711,7 +727,7 @@ class Unit:
 
     @property
     def add_on_tag(self) -> int:
-        """ Returns the tag of the addon of unit. """
+        """ Returns the tag of the addon of unit. If the unit has no addon, returns 0. """
         return self._proto.add_on_tag
 
     @property
@@ -720,10 +736,26 @@ class Unit:
         return bool(self._proto.add_on_tag)
 
     @property_immutable_cache
+    def has_techlab(self) -> bool:
+        """ Check if a structure is connected to a techlab addon. This should only ever return True for BARRACKS, FACTORY, STARPORT. """
+        return self.add_on_tag in self._bot_object.techlab_tags
+
+    @property_immutable_cache
+    def has_reactor(self) -> bool:
+        """ Check if a structure is connected to a reactor addon. This should only ever return True for BARRACKS, FACTORY, STARPORT. """
+        return self.add_on_tag in self._bot_object.reactor_tags
+
+    @property_immutable_cache
     def add_on_land_position(self) -> Point2:
-        """ If unit is addon (techlab or reactor), returns the position
-        where a terran building has to land to connect to addon """
+        """ If this unit is an addon (techlab, reactor), returns the position
+        where a terran building (BARRACKS, FACTORY, STARPORT) has to land to connect to this addon. """
         return self.position.offset(Point2((-2.5, 0.5)))
+
+    @property_immutable_cache
+    def add_on_position(self) -> Point2:
+        """ If this unit is a terran production building (BARRACKS, FACTORY, STARPORT),
+        this property returns the position of where the addon should be, if it should build one or has one attached. """
+        return self.position.offset(Point2((2.5, -0.5)))
 
     @property_mutable_cache
     def passengers(self) -> Set[Unit]:
@@ -784,11 +816,11 @@ class Unit:
         returns -1 for units that can't attack.
         Usage:
         if unit.weapon_cooldown == 0:
-            self.actions.append(unit.attack(target))
+            self.do(unit.attack(target))
         elif unit.weapon_cooldown < 0:
-            self.actions.append(unit.move(closest_allied_unit_because_cant_attack))
+            self.do(unit.move(closest_allied_unit_because_cant_attack))
         else:
-            self.actions.append(unit.move(retreatPosition)) """
+            self.do(unit.move(retreatPosition)) """
         if self.can_attack:
             return self._proto.weapon_cooldown
         return -1
@@ -807,7 +839,7 @@ class Unit:
 
     def train(self, unit: UnitTypeId, queue: bool = False) -> UnitCommand:
         """ Orders unit to train another 'unit'.
-        Usage: self.actions.append(COMMANDCENTER.train(SCV))
+        Usage: self.do(COMMANDCENTER.train(SCV))
 
         :param unit:
         :param queue: """
@@ -815,13 +847,36 @@ class Unit:
 
     def build(self, unit: UnitTypeId, position: Union[Point2, Point3] = None, queue: bool = False) -> UnitCommand:
         """ Orders unit to build another 'unit' at 'position'.
-        Usage: self.actions.append(SCV.build(COMMANDCENTER, position))
+        Usage::
+
+            self.do(SCV.build(COMMANDCENTER, position))
+            # Target for refinery, assimilator and extractor needs to be the vespene geysir unit, not its position
+            self.do(SCV.build(REFINERY, target_vespene_geysir))
 
         :param unit:
         :param position:
         :param queue:
         """
+        # TODO: add asserts to make sure "position" is not a Point2 or Point3 if "unit" is extractor / refinery / assimilator
         return self(self._bot_object._game_data.units[unit.value].creation_ability.id, target=position, queue=queue)
+
+    def build_gas(self, target_geysir: Unit, queue: bool = False) -> UnitCommand:
+        """ Orders unit to build another 'unit' at 'position'.
+        Usage::
+
+            # Target for refinery, assimilator and extractor needs to be the vespene geysir unit, not its position
+            self.do(SCV.build_gas(target_vespene_geysir))
+
+        :param target_geysir:
+        :param queue:
+        """
+        # TODO: add asserts to make sure "target_geysir" is not a Point2 or Point3
+        gas_structure_type_id: UnitTypeId = race_gas[self._bot_object.race]
+        return self(
+            self._bot_object._game_data.units[gas_structure_type_id.value].creation_ability.id,
+            target=target_geysir,
+            queue=queue,
+        )
 
     def research(self, upgrade: UpgradeId, queue: bool = False) -> UnitCommand:
         """ Orders unit to research 'upgrade'.
@@ -867,7 +922,7 @@ class Unit:
         """
         return self(AbilityId.HARVEST_RETURN, target=target, queue=queue)
 
-    def move(self, position: Union[Point2, Point3], queue: bool = False) -> UnitCommand:
+    def move(self, position: Union[Unit, Point2, Point3], queue: bool = False) -> UnitCommand:
         """ Orders the unit to move to 'position'.
         Target can be a Unit (to follow that unit) or Point2. 
 
