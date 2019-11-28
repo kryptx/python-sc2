@@ -6,6 +6,7 @@ import random
 import time
 from collections import Counter
 from typing import Any, Dict, List, Optional, Set, Tuple, Union, TYPE_CHECKING
+from s2clientprotocol import sc2api_pb2 as sc_pb
 
 from .cache import property_cache_forever, property_cache_once_per_frame
 from .constants import (
@@ -37,13 +38,13 @@ from .position import Point2, Point3
 from .unit import Unit
 from .units import Units
 from .game_data import Cost
+from .unit_command import UnitCommand
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .game_info import GameInfo, Ramp
     from .client import Client
-    from .unit_command import UnitCommand
 
 
 class BotAI(DistanceCalculation):
@@ -52,6 +53,7 @@ class BotAI(DistanceCalculation):
     EXPANSION_GAP_THRESHOLD = 15
 
     def _initialize_variables(self):
+        """ Called from main.py internally """
         DistanceCalculation.__init__(self)
         # Specific opponent bot ID used in sc2ai ladder games http://sc2ai.net/ and on ai arena https://ai-arena.net
         # The bot ID will stay the same each game so your bot can "adapt" to the opponent
@@ -82,17 +84,18 @@ class BotAI(DistanceCalculation):
         self.reactor_tags: Set[int] = set()
         self.minerals: int = None
         self.vespene: int = None
-        self.supply_army: Union[float, int] = None
-        self.supply_workers: Union[float, int] = None  # Doesn't include workers in production
-        self.supply_cap: Union[float, int] = None
-        self.supply_used: Union[float, int] = None
-        self.supply_left: Union[float, int] = None
+        self.supply_army: float = None
+        self.supply_workers: float = None  # Doesn't include workers in production
+        self.supply_cap: float = None
+        self.supply_used: float = None
+        self.supply_left: float = None
         self.idle_worker_count: int = None
         self.army_count: int = None
         self.warp_gate_count: int = None
         self.larva_count: int = None
         self.actions: List[UnitCommand] = []
         self.blips: Set[Blip] = set()
+        self._units_created: Counter = Counter()
         self._unit_tags_seen_this_game: Set[int] = set()
         self._units_previous_map: Dict[int, Unit] = dict()
         self._structures_previous_map: Dict[int, Unit] = dict()
@@ -314,6 +317,26 @@ class BotAI(DistanceCalculation):
             centers[result] = resources
         return centers
 
+    @property
+    def units_created(self) -> Counter:
+        """ Returns a Counter for all your units and buildings you have created so far.
+
+        This may be used for statistics (at the end of the game) or for strategic decision making.
+
+        CAUTION: This does not properly work at the moment for morphing units and structures. Please use the 'on_unit_type_changed' event to add these morphing unit types manually to 'self._units_created'.
+        Issues would arrise in e.g. siege tank morphing to sieged tank, and then morphing back (suddenly the counter counts 2 tanks have been created).
+
+        Examples::
+
+            # Give attack command to enemy base every time 10 marines have been trained
+            async def on_unit_created(self, unit: Unit):
+                if unit.type_id == UnitTypeId.MARINE:
+                    if self.units_created[MARINE] % 10 == 0:
+                        for marine in self.units(UnitTypeId.MARINE):
+                            self.do(marine.attack(self.enemy_start_locations[0]))
+        """
+        return self._units_created
+
     def _correct_zerg_supply(self):
         """ The client incorrectly rounds zerg supply down instead of up (see
             https://github.com/Blizzard/s2client-proto/issues/123), so self.supply_used
@@ -350,7 +373,7 @@ class BotAI(DistanceCalculation):
         return await self._client.query_available_abilities(units, ignore_resource_requirements)
 
     async def expand_now(
-        self, building: UnitTypeId = None, max_distance: Union[int, float] = 10, location: Optional[Point2] = None
+        self, building: UnitTypeId = None, max_distance: float = 10, location: Optional[Point2] = None
     ):
         """ Finds the next possible expansion via 'self.get_next_expansion()'. If the target expansion is blocked (e.g. an enemy unit), it will misplace the expansion.
 
@@ -408,8 +431,6 @@ class BotAI(DistanceCalculation):
         Keyword `resource_ratio` takes a float. If the current minerals to gas
         ratio is bigger than `resource_ratio`, this function prefer filling gas_buildings
         first, if it is lower, it will prefer sending workers to minerals first.
-        This is only for workers that need to be moved anyways, it will NOT fill
-        gas_buildings on its own.
 
         NOTE: This function is far from optimal, if you really want to have
         refined worker control, you should write your own distribution function.
@@ -512,7 +533,6 @@ class BotAI(DistanceCalculation):
     @property
     def owned_expansions(self) -> Dict[Point2, Unit]:
         """List of expansions owned by the player."""
-
         owned = {}
         for el in self.expansion_locations:
 
@@ -522,7 +542,6 @@ class BotAI(DistanceCalculation):
             th = next((x for x in self.townhalls if is_near_to_expansion(x)), None)
             if th:
                 owned[el] = th
-
         return owned
 
     def calculate_supply_cost(self, unit_type: UnitTypeId) -> float:
@@ -565,6 +584,21 @@ class BotAI(DistanceCalculation):
         # "required <= 0" in case self.supply_left is negative
         return required <= 0 or self.supply_left >= required
 
+    def calculate_unit_value(self, unit_type: UnitTypeId) -> Cost:
+        """
+        Unlike the function below, this function returns the value of a unit given by the API (e.g. the resources lost value on kill).
+
+        Examples::
+
+            self.calculate_value(UnitTypeId.ORBITALCOMMAND) == Cost(550, 0)
+            self.calculate_value(UnitTypeId.RAVAGER) == Cost(100, 100)
+            self.calculate_value(UnitTypeId.ARCHON) == Cost(175, 275)
+
+        :param unit_type:
+        """
+        unit_data = self.game_data.units[unit_type.value]
+        return Cost(unit_data._proto.mineral_cost, unit_data._proto.vespene_cost)
+
     def calculate_cost(self, item_id: Union[UnitTypeId, UpgradeId, AbilityId]) -> Cost:
         """
         Calculate the required build, train or morph cost of a unit. It is recommended to use the UnitTypeId instead of the ability to create the unit.
@@ -597,11 +631,13 @@ class BotAI(DistanceCalculation):
         """
         if isinstance(item_id, UnitTypeId):
             # Fix cost for reactor and techlab where the API returns 0 for both
-            if item_id in {UnitTypeId.REACTOR, UnitTypeId.TECHLAB}:
+            if item_id in {UnitTypeId.REACTOR, UnitTypeId.TECHLAB, UnitTypeId.ARCHON}:
                 if item_id == UnitTypeId.REACTOR:
                     return Cost(50, 50)
                 elif item_id == UnitTypeId.TECHLAB:
                     return Cost(50, 25)
+                elif item_id == UnitTypeId.ARCHON:
+                    return self.calculate_unit_value(UnitTypeId.ARCHON)
             unit_data = self._game_data.units[item_id.value]
             # Cost of structure morphs is automatically correctly calculated by 'calculate_ability_cost'
             cost = self._game_data.calculate_ability_cost(unit_data.creation_ability)
@@ -820,7 +856,7 @@ class BotAI(DistanceCalculation):
         return None
 
     # TODO: improve using cache per frame
-    def already_pending_upgrade(self, upgrade_type: UpgradeId) -> Union[int, float]:
+    def already_pending_upgrade(self, upgrade_type: UpgradeId) -> float:
         """ Check if an upgrade is being researched
 
         Returns values are::
@@ -866,7 +902,7 @@ class BotAI(DistanceCalculation):
 
         return abilities_amount
 
-    def already_pending(self, unit_type: Union[UpgradeId, UnitTypeId]) -> int:
+    def already_pending(self, unit_type: Union[UpgradeId, UnitTypeId]) -> float:
         """
         Returns a number of buildings or units already in progress, or if a
         worker is en route to build it. This also includes queued orders for
@@ -1231,6 +1267,7 @@ class BotAI(DistanceCalculation):
         :param subtract_supply:
         :param can_afford_check:
         """
+        assert isinstance(action, UnitCommand), f"Given unit command is not a command, but instead of type {type(action)}"
         if subtract_cost:
             cost: Cost = self._game_data.calculate_ability_cost(action.ability)
             if can_afford_check and not (self.minerals >= cost.minerals and self.vespene >= cost.vespene):
@@ -1254,6 +1291,26 @@ class BotAI(DistanceCalculation):
         self.actions.append(action)
         self.unit_tags_received_action.add(action.unit.tag)
         return True
+
+    async def synchronous_do(self, action: UnitCommand):
+        """
+        Not recommended. Use self.do instead to reduce lag.
+        This function is only useful for realtime=True in the first frame of the game to instantly produce a worker
+        and split workers on the mineral patches.
+        """
+        assert isinstance(action, UnitCommand), f"Given unit command is not a command, but instead of type {type(action)}"
+        if not self.can_afford(action.ability):
+            logger.warning(f"Cannot afford action {action}")
+            return ActionResult.Error
+        r = await self._client.actions(action)
+        if not r:  # success
+            cost = self._game_data.calculate_ability_cost(action.ability)
+            self.minerals -= cost.minerals
+            self.vespene -= cost.vespene
+            self.unit_tags_received_action.add(action.unit.tag)
+        else:
+            logger.error(f"Error: {r} (action: {action})")
+        return r
 
     async def _do_actions(self, actions: List[UnitCommand], prevent_double: bool = True):
         """ Used internally by main.py automatically, use self.do() instead!
@@ -1333,8 +1390,7 @@ class BotAI(DistanceCalculation):
     def in_placement_grid(self, pos: Union[Point2, Point3, Unit]) -> bool:
         """ Returns True if you can place something at a position.
         Remember, buildings usually use 2x2, 3x3 or 5x5 of these grid points.
-        Caution: some x and y offset might be required, see ramp code:
-        https://github.com/Dentosal/python-sc2/blob/master/sc2/game_info.py#L17-L18
+        Caution: some x and y offset might be required, see ramp code in game_info.py
 
         :param pos: """
         assert isinstance(pos, (Point2, Point3, Unit)), f"pos is not of type Point2, Point3 or Unit"
@@ -1549,6 +1605,21 @@ class BotAI(DistanceCalculation):
 
         return self.state.game_loop
 
+    async def _advance_steps(self, steps: int):
+        """ Advances the game loop by amount of 'steps'. This function is meant to be used as a debugging and testing tool only.
+        If you are using this, please be aware of the consequences, e.g. 'self.units' will be filled with completely new data. """
+        old_game_loop = self.state.game_loop
+        await self._after_step()
+        # Advance simulation by exactly "steps" frames
+        await self.client.step(steps)
+        state = await self.client.observation()
+        gs = GameState(state.observation)
+        proto_game_info = await self.client._execute(game_info=sc_pb.RequestGameInfo())
+        self._prepare_step(gs, proto_game_info)
+        # print(f"Advanced from game loop ({old_game_loop}) to ({self.state.game_loop})")
+        # await self.issue_events()
+        # await self.on_step(-1)
+
     async def issue_events(self):
         """ This function will be automatically run from main.py and triggers the following functions:
         - on_unit_created
@@ -1567,12 +1638,17 @@ class BotAI(DistanceCalculation):
         for unit in self.units:
             if unit.tag not in self._units_previous_map and unit.tag not in self._unit_tags_seen_this_game:
                 self._unit_tags_seen_this_game.add(unit.tag)
+                self._units_created[unit.type_id] += 1
                 await self.on_unit_created(unit)
             elif unit.tag in self._units_previous_map:
-                # Check if a unit took damage this frame and then trigger event
                 previous_frame_unit: Unit = self._units_previous_map[unit.tag]
+                # Check if a unit took damage this frame and then trigger event
                 if unit.health < previous_frame_unit.health or unit.shield < previous_frame_unit.shield:
-                    await self.on_unit_took_damage(unit)
+                    damage_amount = previous_frame_unit.health - unit.health + previous_frame_unit.shield - unit.shield
+                    await self.on_unit_took_damage(unit, damage_amount)
+                # Check if a unit type has changed
+                if previous_frame_unit.type_id != unit.type_id:
+                    await self.on_unit_type_changed(unit, previous_frame_unit.type_id)
 
     async def _issue_upgrade_events(self):
         difference = self.state.upgrades - self._previous_upgrades
@@ -1582,10 +1658,13 @@ class BotAI(DistanceCalculation):
 
     async def _issue_building_events(self):
         for structure in self.structures:
-            # Check build_progress < 1 to exclude starting townhall
-            if structure.tag not in self._structures_previous_map and structure.build_progress < 1:
-                await self.on_building_construction_started(structure)
-                continue
+            if structure.tag not in self._structures_previous_map:
+                if structure.build_progress < 1:
+                    await self.on_building_construction_started(structure)
+                else:
+                    # Include starting townhall
+                    self._units_created[structure.type_id] += 1
+                    await self.on_building_construction_complete(structure)
             elif structure.tag in self._structures_previous_map:
                 # Check if a structure took damage this frame and then trigger event
                 previous_frame_structure: Unit = self._structures_previous_map[structure.tag]
@@ -1593,14 +1672,20 @@ class BotAI(DistanceCalculation):
                     structure.health < previous_frame_structure.health
                     or structure.shield < previous_frame_structure.shield
                 ):
-                    await self.on_unit_took_damage(structure)
-            # From here on, only check completed structure, so we ignore structures with build_progress < 1
-            if structure.build_progress < 1:
-                continue
-            # Using get function in case somehow the previous structure map (from last frame) does not contain this structure
-            structure_prev = self._structures_previous_map.get(structure.tag, None)
-            if structure_prev and structure_prev.build_progress < 1:
-                await self.on_building_construction_complete(structure)
+                    damage_amount = (
+                        previous_frame_structure.health
+                        - structure.health
+                        + previous_frame_structure.shield
+                        - structure.shield
+                    )
+                    await self.on_unit_took_damage(structure, damage_amount)
+                # Check if a structure changed its type
+                if previous_frame_structure.type_id != structure.type_id:
+                    await self.on_unit_type_changed(structure, previous_frame_structure.type_id)
+                # Check if structure completed
+                if structure.build_progress == 1 and previous_frame_structure.build_progress < 1:
+                    self._units_created[structure.type_id] += 1
+                    await self.on_building_construction_complete(structure)
 
     async def _issue_vision_events(self):
         # Call events for enemy unit entered vision
@@ -1641,6 +1726,19 @@ class BotAI(DistanceCalculation):
 
         :param unit: """
 
+    async def on_unit_type_changed(self, unit: Unit, previous_type: UnitTypeId):
+        """ Override this in your bot class. This function is called when a unit type has changed. To get the current UnitTypeId of the unit, use 'unit.type_id'
+
+        This may happen when a larva morphed to an egg, siege tank sieged, a zerg unit burrowed, a hatchery morphed to lair, a corruptor morphed to broodlordcocoon, etc..
+
+        Examples::
+
+            print(f"My unit changed type: {unit} from {previous_type} to {unit.type_id}")
+
+        :param unit:
+        :param previous_type:
+        """
+
     async def on_building_construction_started(self, unit: Unit):
         """
         Override this in your bot class.
@@ -1664,10 +1762,16 @@ class BotAI(DistanceCalculation):
         :param upgrade:
         """
 
-    async def on_unit_took_damage(self, unit: Unit):
+    async def on_unit_took_damage(self, unit: Unit, amount_damage_taken: float):
         """
-        Override this in your bot class. This function is called when a unit (unit or structure) took damage. It will not be called if the unit died this frame.
+        Override this in your bot class. This function is called when your own unit (unit or structure) took damage. It will not be called if the unit died this frame.
+
         This may be called frequently for terran structures that are burning down, or zerg buildings that are off creep, or terran bio units that just used stimpack ability.
+        TODO: If there is a demand for it, then I can add a similar event for when enemy units took damage
+
+        Examples::
+
+            print(f"My unit took damage: {unit} took {amount_damage_taken} damage")
 
         :param unit:
         """
@@ -1684,7 +1788,20 @@ class BotAI(DistanceCalculation):
         Override this in your bot class. This function is called when an enemy unit (unit or structure) left vision (which was visible last frame).
         Same as the self.on_unit_destroyed event, this function is called with the unit's tag because the unit is no longer visible anymore. If you want to store a snapshot of the unit, use self._enemy_units_previous_map[unit_tag] for units or self._enemy_structures_previous_map[unit_tag] for structures.
 
+        Examples::
+
+            last_known_unit = self._enemy_units_previous_map.get(unit_tag, None) or self._enemy_structures_previous_map[unit_tag]
+            print(f"Enemy unit left vision, last known location: {last_known_unit.position}")
+
         :param unit_tag:
+        """
+
+    async def on_before_start(self):
+        """
+        Override this in your bot class. This function is called before "on_start"
+        and before "prepare_first_step" that calculates expansion locations.
+        Not all data is available yet.
+        This function is useful in realtime=True mode to split your workers or start producing the first worker.
         """
 
     async def on_start(self):
@@ -1704,6 +1821,6 @@ class BotAI(DistanceCalculation):
         raise NotImplementedError
 
     async def on_end(self, game_result: Result):
-        """ Override this in your bot class. This function is called at the end of a game.
+        """ Override this in your bot class. This function is called at the end of a game. Unsure if this function will be called on the laddermanager client as the bot process may forcefully be terminated.
 
         :param game_result: """

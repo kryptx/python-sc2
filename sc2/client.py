@@ -139,9 +139,10 @@ class Client(Protocol):
 
         return result
 
-    async def step(self):
+    async def step(self, step_size: int = None):
         """ EXPERIMENTAL: Change self._client.game_step during the step function to increase or decrease steps per second """
-        return await self._execute(step=sc_pb.RequestStep(count=self.game_step))
+        step_size = step_size or self.game_step
+        return await self._execute(step=sc_pb.RequestStep(count=step_size))
 
     async def get_game_data(self) -> GameData:
         result = await self._execute(
@@ -507,7 +508,7 @@ class Client(Protocol):
         self, p: Union[Unit, Point2, Point3], r: Union[int, float], color: Union[tuple, list, Point3] = None
     ):
         """ Draws a sphere at point p with radius r. """
-        self._debug_boxes.append(DrawItemSphere(start_point=p, radius=r, color=color))
+        self._debug_spheres.append(DrawItemSphere(start_point=p, radius=r, color=color))
 
     async def _send_debug(self):
         """ Sends the debug draw execution. This is run by main.py now automatically, if there is any items in the list. You do not need to run this manually any longer.

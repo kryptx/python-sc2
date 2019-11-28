@@ -154,15 +154,27 @@ RESEARCH_INFO: Dict[
         UpgradeId.CYCLONELOCKONDAMAGEUPGRADE: {
             "ability": AbilityId.RESEARCH_CYCLONELOCKONDAMAGE
         },
+        UpgradeId.DRILLCLAWS: {
+            "ability": AbilityId.RESEARCH_DRILLINGCLAWS,
+            "required_building": UnitTypeId.ARMORY,
+        },
         UpgradeId.HIGHCAPACITYBARRELS: {
             "ability": AbilityId.RESEARCH_INFERNALPREIGNITER
+        },
+        UpgradeId.SMARTSERVOS: {
+            "ability": AbilityId.RESEARCH_SMARTSERVOS,
+            "required_building": UnitTypeId.ARMORY,
         },
     },
     UnitTypeId.FLEETBEACON: {
         UpgradeId.PHOENIXRANGEUPGRADE: {
             "ability": AbilityId.RESEARCH_PHOENIXANIONPULSECRYSTALS,
             "requires_power": True,
-        }
+        },
+        UpgradeId.VOIDRAYSPEEDUPGRADE: {
+            "ability": AbilityId.FLEETBEACONRESEARCH_RESEARCHVOIDRAYSPEEDUPGRADE,
+            "requires_power": True,
+        },
     },
     UnitTypeId.FORGE: {
         UpgradeId.PROTOSSGROUNDARMORSLEVEL1: {
@@ -211,10 +223,19 @@ RESEARCH_INFO: Dict[
     UnitTypeId.FUSIONCORE: {
         UpgradeId.BATTLECRUISERENABLESPECIALIZATIONS: {
             "ability": AbilityId.RESEARCH_BATTLECRUISERWEAPONREFIT
-        }
+        },
+        UpgradeId.LIBERATORAGRANGEUPGRADE: {
+            "ability": AbilityId.FUSIONCORERESEARCH_RESEARCHBALLISTICRANGE
+        },
+        UpgradeId.MEDIVACINCREASESPEEDBOOST: {
+            "ability": AbilityId.FUSIONCORERESEARCH_RESEARCHRAPIDREIGNITIONSYSTEM
+        },
     },
     UnitTypeId.GHOSTACADEMY: {
-        UpgradeId.PERSONALCLOAKING: {"ability": AbilityId.RESEARCH_PERSONALCLOAKING}
+        UpgradeId.ENHANCEDSHOCKWAVES: {
+            "ability": AbilityId.GHOSTACADEMYRESEARCH_RESEARCHENHANCEDSHOCKWAVES
+        },
+        UpgradeId.PERSONALCLOAKING: {"ability": AbilityId.RESEARCH_PERSONALCLOAKING},
     },
     UnitTypeId.GREATERSPIRE: {
         UpgradeId.ZERGFLYERARMORSLEVEL1: {
@@ -222,22 +243,22 @@ RESEARCH_INFO: Dict[
         },
         UpgradeId.ZERGFLYERARMORSLEVEL2: {
             "ability": AbilityId.RESEARCH_ZERGFLYERARMORLEVEL2,
-            "required_building": UnitTypeId.GREATERSPIRE,
+            "required_building": UnitTypeId.LAIR,
         },
         UpgradeId.ZERGFLYERARMORSLEVEL3: {
             "ability": AbilityId.RESEARCH_ZERGFLYERARMORLEVEL3,
-            "required_building": UnitTypeId.GREATERSPIRE,
+            "required_building": UnitTypeId.HIVE,
         },
         UpgradeId.ZERGFLYERWEAPONSLEVEL1: {
             "ability": AbilityId.RESEARCH_ZERGFLYERATTACKLEVEL1
         },
         UpgradeId.ZERGFLYERWEAPONSLEVEL2: {
             "ability": AbilityId.RESEARCH_ZERGFLYERATTACKLEVEL2,
-            "required_building": UnitTypeId.GREATERSPIRE,
+            "required_building": UnitTypeId.LAIR,
         },
         UpgradeId.ZERGFLYERWEAPONSLEVEL3: {
             "ability": AbilityId.RESEARCH_ZERGFLYERATTACKLEVEL3,
-            "required_building": UnitTypeId.GREATERSPIRE,
+            "required_building": UnitTypeId.HIVE,
         },
     },
     UnitTypeId.HATCHERY: {
@@ -256,6 +277,10 @@ RESEARCH_INFO: Dict[
     },
     UnitTypeId.INFESTATIONPIT: {
         UpgradeId.INFESTORENERGYUPGRADE: {"ability": AbilityId.RESEARCH_PATHOGENGLANDS},
+        UpgradeId.MICROBIALSHROUD: {
+            "ability": AbilityId.INFESTATIONPITRESEARCH_EVOLVEAMORPHOUSARMORCLOUD,
+            "required_building": UnitTypeId.HIVE,
+        },
         UpgradeId.NEURALPARASITE: {"ability": AbilityId.RESEARCH_NEURALPARASITE},
     },
     UnitTypeId.LAIR: {
@@ -310,22 +335,22 @@ RESEARCH_INFO: Dict[
         },
         UpgradeId.ZERGFLYERARMORSLEVEL2: {
             "ability": AbilityId.RESEARCH_ZERGFLYERARMORLEVEL2,
-            "required_building": UnitTypeId.GREATERSPIRE,
+            "required_building": UnitTypeId.LAIR,
         },
         UpgradeId.ZERGFLYERARMORSLEVEL3: {
             "ability": AbilityId.RESEARCH_ZERGFLYERARMORLEVEL3,
-            "required_building": UnitTypeId.GREATERSPIRE,
+            "required_building": UnitTypeId.HIVE,
         },
         UpgradeId.ZERGFLYERWEAPONSLEVEL1: {
             "ability": AbilityId.RESEARCH_ZERGFLYERATTACKLEVEL1
         },
         UpgradeId.ZERGFLYERWEAPONSLEVEL2: {
             "ability": AbilityId.RESEARCH_ZERGFLYERATTACKLEVEL2,
-            "required_building": UnitTypeId.GREATERSPIRE,
+            "required_building": UnitTypeId.LAIR,
         },
         UpgradeId.ZERGFLYERWEAPONSLEVEL3: {
             "ability": AbilityId.RESEARCH_ZERGFLYERATTACKLEVEL3,
-            "required_building": UnitTypeId.GREATERSPIRE,
+            "required_building": UnitTypeId.HIVE,
         },
     },
     UnitTypeId.STARPORTTECHLAB: {
@@ -337,9 +362,6 @@ RESEARCH_INFO: Dict[
             "upgrade": UpgradeId.LIBERATORMORPH,
             "ability": AbilityId.STARPORTTECHLABRESEARCH_RESEARCHLIBERATORAGMODE,
             "requires_tech_building": UnitTypeId.FUSIONCORE,
-        },
-        UpgradeId.MEDIVACINCREASESPEEDBOOST: {
-            "ability": AbilityId.RESEARCH_HIGHCAPACITYFUELTANKS
         },
         UpgradeId.RAVENCORVIDREACTOR: {
             "ability": AbilityId.RESEARCH_RAVENCORVIDREACTOR
