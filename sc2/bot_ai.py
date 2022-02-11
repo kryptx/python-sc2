@@ -1657,7 +1657,7 @@ class BotAI(DistanceCalculation):
         # Set attributes from new state before on_step."""
         self.state: GameState = state  # See game_state.py
         # update pathing grid, which unfortunately is in GameInfo instead of GameState
-        self._game_info.pathing_grid: PixelMap = PixelMap(
+        self._game_info.pathing_grid = PixelMap(
             proto_game_info.game_info.start_raw.pathing_grid, in_bits=True, mirrored=False
         )
         # Required for events, needs to be before self.units are initialized so the old units are stored
