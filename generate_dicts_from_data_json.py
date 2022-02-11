@@ -1,18 +1,3 @@
-import json, os, subprocess
-import lzma, pickle
-from typing import Dict, Set, List, Union, Optional
-
-from sc2.ids.unit_typeid import UnitTypeId
-from sc2.ids.ability_id import AbilityId
-from sc2.ids.buff_id import BuffId
-from sc2.ids.upgrade_id import UpgradeId
-from sc2.ids.effect_id import EffectId
-from sc2.game_data import GameData
-
-from collections import OrderedDict
-
-# from ordered_set import OrderedSet
-
 """
 Script requirements:
 pip install black
@@ -31,6 +16,26 @@ json viewers to inspect the data.json manually:
 http://jsonviewer.stack.hu/
 https://jsonformatter.org/json-viewer
 """
+import json
+import lzma
+import os
+import pickle
+import subprocess
+from collections import OrderedDict
+from pathlib import Path
+from typing import Dict, List, Optional, Set, Union
+
+from loguru import logger
+
+from sc2.game_data import GameData
+from sc2.ids.ability_id import AbilityId
+from sc2.ids.unit_typeid import UnitTypeId
+from sc2.ids.upgrade_id import UpgradeId
+
+
+def get_map_file_path() -> Path:
+    return Path(__file__).parent / "test" / "pickle_data" / "DeathAuraLE.xz"
+
 
 # Custom repr function so that the output is always the same and only changes when there were changes in the data.json tech tree file
 # The output just needs to be ordered (sorted by enum name), but it does not matter anymore if the bot then imports an unordered dict and set
@@ -39,9 +44,9 @@ class OrderedDict2(OrderedDict):
         if not self:
             return "{}"
         return (
-            "{"
-            + ", ".join(f"{repr(key)}: {repr(value)}" for key, value in sorted(self.items(), key=lambda u: u[0].name))
-            + "}"
+            "{" +
+            ", ".join(f"{repr(key)}: {repr(value)}"
+                      for key, value in sorted(self.items(), key=lambda u: u[0].name)) + "}"
         )
 
 
@@ -60,11 +65,11 @@ def dump_dict_to_file(
         f.write("\n")
         f.write(f"{dict_name}{dict_type_annotation} = ")
         assert isinstance(my_dict, OrderedDict2)
-        print(my_dict)
+        logger.info(my_dict)
         f.write(repr(my_dict))
 
     # Apply formatting
-    subprocess.run(["black", file_path])
+    subprocess.run(["black", "--line-length", "120", file_path])
 
 
 def generate_init_file(dict_file_paths: List[str], file_path: str, file_header: str):
@@ -75,11 +80,11 @@ def generate_init_file(dict_file_paths: List[str], file_path: str, file_header: 
         f.write("\n")
 
         all_line = f"__all__ = {base_file_names}"
-        print(all_line)
+        logger.info(all_line)
         f.write(all_line)
 
     # Apply formatting
-    subprocess.run(["black", file_path])
+    subprocess.run(["black", "--line-length", "120", file_path])
 
 
 def get_unit_train_build_abilities(data):
@@ -122,9 +127,7 @@ def get_unit_train_build_abilities(data):
         # Collect larva morph abilities, and one way morphs (exclude burrow, hellbat morph, siege tank siege)
         # Also doesnt include building addons
         if not train_unit_type_id_value and (
-            "LARVATRAIN_" in ability_id.name
-            or ability_id
-            in {
+            "LARVATRAIN_" in ability_id.name or ability_id in {
                 AbilityId.MORPHTOBROODLORD_BROODLORD,
                 AbilityId.MORPHZERGLINGTOBANELING_BANELING,
                 AbilityId.MORPHTORAVAGER_RAVAGER,
@@ -132,6 +135,8 @@ def get_unit_train_build_abilities(data):
                 AbilityId.UPGRADETOLAIR_LAIR,
                 AbilityId.UPGRADETOHIVE_HIVE,
                 AbilityId.UPGRADETOGREATERSPIRE_GREATERSPIRE,
+                AbilityId.UPGRADETOORBITAL_ORBITALCOMMAND,
+                AbilityId.UPGRADETOPLANETARYFORTRESS_PLANETARYFORTRESS,
                 AbilityId.MORPH_OVERLORDTRANSPORT,
                 AbilityId.MORPH_OVERSEER,
             }
@@ -163,14 +168,13 @@ def get_unit_train_build_abilities(data):
                 ability_requires_placement.add(ability_id)
 
             ability_to_unittypeid_dict[ability_id] = created_unit_type_id
-
     """
     unit_train_abilities = {
         UnitTypeId.GATEWAY: {
             UnitTypeId.ADEPT: {
                 "ability": AbilityId.TRAIN_ADEPT,
                 "requires_techlab": False,
-                "requires_tech_building": UnitTypeId.CYBERNETICSCORE, # Or None
+                "required_building": UnitTypeId.CYBERNETICSCORE, # Or None
                 "requires_placement_position": False, # True for warp gate
                 "requires_power": True, # If a pylon nearby is required
             },
@@ -195,10 +199,9 @@ def get_unit_train_build_abilities(data):
                     continue
 
                 requires_techlab: bool = False
-                requires_tech_building: Optional[UnitTypeId] = None
+                required_building: Optional[UnitTypeId] = None
                 requires_placement_position: bool = False
                 requires_power: bool = False
-
                 """
                 requirements = [
                     {
@@ -221,7 +224,7 @@ def get_unit_train_build_abilities(data):
                         (req["building"] for req in requirements if req.get("building", 0)), 0
                     )
                     if requires_tech_builing_id_value:
-                        requires_tech_building = UnitTypeId(requires_tech_builing_id_value)
+                        required_building = UnitTypeId(requires_tech_builing_id_value)
 
                 if ability_id in ability_requires_placement:
                     requires_placement_position = True
@@ -234,8 +237,8 @@ def get_unit_train_build_abilities(data):
                 # Only add boolean values and tech requirement if they actually exist, to make the resulting dict file smaller
                 if requires_techlab:
                     ability_dict["requires_techlab"] = requires_techlab
-                if requires_tech_building:
-                    ability_dict["requires_tech_building"] = requires_tech_building
+                if required_building:
+                    ability_dict["required_building"] = required_building
                 if requires_placement_position:
                     ability_dict["requires_placement_position"] = requires_placement_position
                 if requires_power:
@@ -254,7 +257,6 @@ def get_upgrade_abilities(data):
     upgrade_data = data["Upgrade"]
 
     ability_to_upgrade_dict: Dict[AbilityId, UpgradeId] = OrderedDict2()
-
     """
     We want to be able to research an upgrade by doing
     await self.can_research(UpgradeId, return_idle_structures=True) -> returns list of idle structures that can research it
@@ -274,19 +276,18 @@ def get_upgrade_abilities(data):
             upgrade_id: UpgradeId = UpgradeId(upgrade_id_value)
 
             ability_to_upgrade_dict[ability_id] = upgrade_id
-
     """
     unit_research_abilities = {
         UnitTypeId.ENGINEERINGBAY: {
             UpgradeId.TERRANINFANTRYWEAPONSLEVEL1:
             {
                 "ability": AbilityId.ENGINEERINGBAYRESEARCH_TERRANINFANTRYWEAPONSLEVEL1,
-                "requires_tech_building": None,
+                "required_building": None,
                 "requires_power": False, # If a pylon nearby is required
             },
             UpgradeId.TERRANINFANTRYWEAPONSLEVEL2: {
                 "ability": AbilityId.ENGINEERINGBAYRESEARCH_TERRANINFANTRYWEAPONSLEVEL2,
-                "requires_tech_building": UnitTypeId.ARMORY,
+                "required_building": UnitTypeId.ARMORY,
                 "requires_power": False, # If a pylon nearby is required
             },
         }
@@ -313,6 +314,7 @@ def get_upgrade_abilities(data):
                     continue
 
                 required_building = None
+                required_upgrade = None
                 requirements = ability_info.get("requirements", [])
                 if requirements:
                     req_building_id_value = next(
@@ -322,6 +324,11 @@ def get_upgrade_abilities(data):
                         req_building_id = UnitTypeId(req_building_id_value)
                         required_building = req_building_id
 
+                    req_upgrade_id_value = next((req["upgrade"] for req in requirements if req.get("upgrade", 0)), None)
+                    if req_upgrade_id_value:
+                        req_upgrade_id = UpgradeId(req_upgrade_id_value)
+                        required_upgrade = req_upgrade_id
+
                 requires_power = entry.get("needs_power", False)
 
                 resulting_upgrade = ability_to_upgrade_dict[ability_id]
@@ -329,6 +336,8 @@ def get_upgrade_abilities(data):
                 research_info = {"ability": ability_id}
                 if required_building:
                     research_info["required_building"] = required_building
+                if required_upgrade:
+                    research_info["required_upgrade"] = required_upgrade
                 if requires_power:
                     research_info["requires_power"] = requires_power
                 current_unit_research_abilities[resulting_upgrade] = research_info
@@ -382,6 +391,7 @@ def get_upgrade_researched_from(unit_research_abilities: dict):
 
     for researcher_unit, research_abilities in unit_research_abilities.items():
         for upgrade, research_info in research_abilities.items():
+            # This if statement is to prevent LAIR and HIVE overriding "UpgradeId.OVERLORDSPEED" as well as greater spire overriding upgrade abilities
             if upgrade not in upgrade_researched_from:
                 upgrade_researched_from[upgrade] = researcher_unit
 
@@ -405,7 +415,7 @@ def get_unit_abilities(data: dict):
                 ability_id: AbilityId = AbilityId(ability_id_value)
                 current_collected_unit_abilities.add(ability_id)
 
-        # print(unit_type, current_unit_abilities)
+        # logger.info(unit_type, current_unit_abilities)
         if current_collected_unit_abilities:
             all_unit_abilities[unit_type] = current_collected_unit_abilities
     return all_unit_abilities
@@ -417,11 +427,10 @@ def generate_unit_alias_dict(data: dict):
     upgrade_data = data["Upgrade"]
 
     # Load pickled game data files from one of the test files
-    path = os.path.dirname(__file__)
-    pickled_files_folder_path = os.path.join(path, "test", "pickle_data")
-    pickled_files = os.listdir(pickled_files_folder_path)
-    random_pickled_file = next(f for f in pickled_files if f.endswith(".xz"))
-    with lzma.open(os.path.join(pickled_files_folder_path, random_pickled_file), "rb") as f:
+    pickled_file_path = get_map_file_path()
+    assert pickled_file_path.is_file(), f"Could not find pickled data file {pickled_file_path}"
+    logger.info(f"Loading pickled game data file {pickled_file_path}")
+    with lzma.open(pickled_file_path.absolute(), "rb") as f:
         raw_game_data, raw_game_info, raw_observation = pickle.load(f)
         game_data = GameData(raw_game_data.data)
 
@@ -435,7 +444,9 @@ def generate_unit_alias_dict(data: dict):
 
         current_unit_tech_aliases: Set[UnitTypeId] = OrderedSet2()
 
-        assert unit_type_value in game_data.units, f"Unit {unit_type} not listed in game_data.units"
+        assert (
+            unit_type_value in game_data.units
+        ), f"Unit {unit_type} not listed in game_data.units - perhaps pickled file {pickled_file_path} is outdated?"
         unit_alias: int = game_data.units[unit_type_value]._proto.unit_alias
         if unit_alias:
             # Might be 0 if it has no alias
@@ -461,11 +472,10 @@ def generate_redirect_abilities_dict(data: dict):
     upgrade_data = data["Upgrade"]
 
     # Load pickled game data files
-    path = os.path.dirname(__file__)
-    pickled_files_folder_path = os.path.join(path, "test", "pickle_data")
-    pickled_files = os.listdir(pickled_files_folder_path)
-    random_pickled_file = next(f for f in pickled_files if f.endswith(".xz"))
-    with lzma.open(os.path.join(pickled_files_folder_path, random_pickled_file), "rb") as f:
+    pickled_file_path = get_map_file_path()
+    assert pickled_file_path.is_file(), f"Could not find pickled data file {pickled_file_path}"
+    logger.info(f"Loading pickled game data file {pickled_file_path}")
+    with lzma.open(pickled_file_path.absolute(), "rb") as f:
         raw_game_data, raw_game_info, raw_observation = pickle.load(f)
         game_data = GameData(raw_game_data.data)
 
@@ -477,7 +487,7 @@ def generate_redirect_abilities_dict(data: dict):
         try:
             ability_id: AbilityId = AbilityId(ability_id_value)
         except Exception as e:
-            print(f"Error with ability id value {ability_id_value}")
+            logger.info(f"Error with ability id value {ability_id_value}")
             continue
 
         generic_redirect_ability_value: int = game_data.abilities[ability_id_value]._proto.remaps_to_ability_id
@@ -570,7 +580,8 @@ from typing import Dict, Set, Union
         unit_research_abilities_dict_path,
         dict_name="RESEARCH_INFO",
         file_header=file_header,
-        dict_type_annotation=": Dict[UnitTypeId, Dict[UpgradeId, Dict[str, Union[AbilityId, bool, UnitTypeId]]]]",
+        dict_type_annotation=
+        ": Dict[UnitTypeId, Dict[UpgradeId, Dict[str, Union[AbilityId, bool, UnitTypeId, UpgradeId]]]]",
     )
     dump_dict_to_file(
         unit_trained_from,
@@ -615,7 +626,7 @@ from typing import Dict, Set, Union
         dict_type_annotation=": Dict[AbilityId, AbilityId]",
     )
 
-    # print(unit_train_abilities)
+    # logger.info(unit_train_abilities)
 
 
 if __name__ == "__main__":
